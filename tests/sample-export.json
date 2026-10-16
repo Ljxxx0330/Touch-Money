@@ -1,0 +1,204 @@
+{
+  "app": "TouchMoney",
+  "appLabel": "触钱",
+  "exportedAt": "2026-10-16T21:33:30.7202513+08:00",
+  "schemaVersion": 1,
+  "data": {
+    "schemaVersion": 1,
+    "createdAt": "2026-10-16T13:27:15.696Z",
+    "settings": {
+      "monthlyFeeCents": 300000,
+      "cycleDay": 5,
+      "carryOver": true,
+      "reminderPercent": 65,
+      "wishCoolingDefault": true,
+      "months": {
+        "2026-10": 300000,
+        "2026-09": 250000
+      }
+    },
+    "records": [
+      {
+        "id": "demo_r_0",
+        "amount": 1800,
+        "title": "食堂午饭",
+        "category": "food",
+        "date": "2026-10-16",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_1",
+        "amount": 400,
+        "title": "公交充值",
+        "category": "transport",
+        "date": "2026-10-16",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_2",
+        "amount": 2600,
+        "title": "奶茶",
+        "category": "food",
+        "date": "2026-10-15",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_3",
+        "amount": 6800,
+        "title": "专业书",
+        "category": "study",
+        "date": "2026-10-14",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_4",
+        "amount": 1500,
+        "title": "洗衣液",
+        "category": "daily",
+        "date": "2026-10-13",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_5",
+        "amount": 3200,
+        "title": "电影票",
+        "category": "fun",
+        "date": "2026-10-12",
+        "note": "示例数据",
+        "isNonEssential": true,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_6",
+        "amount": 1200,
+        "title": "早餐豆浆",
+        "category": "food",
+        "date": "2026-10-11",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_7",
+        "amount": 9900,
+        "title": "卫衣",
+        "category": "shopping",
+        "date": "2026-10-10",
+        "note": "示例数据",
+        "isNonEssential": true,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_8",
+        "amount": 2200,
+        "title": "地铁出行",
+        "category": "transport",
+        "date": "2026-10-07",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_r_9",
+        "amount": 4500,
+        "title": "聚餐 AA",
+        "category": "food",
+        "date": "2026-10-04",
+        "note": "示例数据",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "imp_r_new1",
+        "amount": 5000,
+        "title": "导入测试A",
+        "category": "study",
+        "date": "2026-10-16",
+        "note": "来自导入文件",
+        "isNonEssential": true,
+        "createdAt": "2026-10-16T10:00:00.000Z",
+        "updatedAt": "2026-10-16T10:00:00.000Z"
+      },
+      {
+        "id": "imp_r_new2",
+        "amount": 12345,
+        "title": "导入测试B",
+        "category": "不存在的分类",
+        "date": "2026-02-30",
+        "note": "",
+        "isNonEssential": false,
+        "createdAt": "2026-10-16T10:00:00.000Z",
+        "updatedAt": "2026-10-16T10:00:00.000Z"
+      },
+      {
+        "id": "imp_r_bad",
+        "amount": "不是数字",
+        "title": "垃圾记录",
+        "category": "food",
+        "date": "2026-10-16"
+      }
+    ],
+    "wishlist": [
+      {
+        "id": "demo_w_0",
+        "name": "降噪耳机",
+        "priceCents": 89900,
+        "addedAt": "2026-10-14",
+        "reason": "自习室太吵，想专注一点",
+        "plannedDate": "",
+        "status": "pending",
+        "coolingEnabled": true,
+        "purchasedAt": "",
+        "recordedRecordId": "",
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "demo_w_1",
+        "name": "机械键盘",
+        "priceCents": 39900,
+        "addedAt": "2026-10-09",
+        "reason": "旧键盘一个键失灵了",
+        "plannedDate": "2026-10-21",
+        "status": "pending",
+        "coolingEnabled": false,
+        "purchasedAt": "",
+        "recordedRecordId": "",
+        "createdAt": "2026-10-16T13:27:15.696Z",
+        "updatedAt": "2026-10-16T13:27:15.696Z"
+      },
+      {
+        "id": "imp_w_new",
+        "name": "导入测试愿望",
+        "priceCents": 42000,
+        "addedAt": "2026-10-16",
+        "reason": "导入校验用",
+        "plannedDate": "",
+        "status": "pending",
+        "coolingEnabled": false,
+        "createdAt": "2026-10-16T10:00:00.000Z",
+        "updatedAt": "2026-10-16T10:00:00.000Z"
+      }
+    ]
+  }
+}

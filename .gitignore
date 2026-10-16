@@ -1,0 +1,18 @@
+# 运行/测试产生的临时文件
+tools/test-output.txt
+tools/serve.log
+*.log
+
+# 浏览器/系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 本地可能放截图以外的临时东西
+tmp/
+.cache/

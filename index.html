@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#1f6b4a" />
+    <meta
+      name="description"
+      content="TouchMoney（触钱）—— 面向大学生的消费感知与资金管理原型：用虚拟现金与消费前后对比，让每一笔消费被真正感受到。数据只存本机浏览器。"
+    />
+    <title>TouchMoney · 触钱｜让每一笔消费，都被真正感受到</title>
+    <link rel="stylesheet" href="./css/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f6b4a'/%3E%3Crect x='5' y='10' width='22' height='14' rx='3.5' fill='none' stroke='%23f6f9f6' stroke-width='2'/%3E%3Cpath d='M5 14h22' stroke='%23f6f9f6' stroke-width='2' opacity='.7'/%3E%3Ccircle cx='21' cy='19' r='2.6' fill='%23c8791f'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+
+    <div id="app">
+      <noscript>
+        <div class="boot-error" hidden="false">
+          <h1>TouchMoney（触钱）需要 JavaScript</h1>
+          <p>
+            这个应用完全运行在你的浏览器里：记账、预算计算和钱包动画都依赖 JavaScript，
+            数据保存在浏览器的本地存储（LocalStorage）中。请在浏览器设置中允许 JavaScript 后重新打开本页。
+          </p>
+        </div>
+      </noscript>
+    </div>
+
+    <div class="boot-error" hidden>
+      <h1>页面未能启动</h1>
+      <p>应用容器缺失，可能是文件不完整。请确认 index.html 与 css/、js/ 目录位于同一文件夹下。</p>
+    </div>
+
+    <div class="no-module" hidden="true">
+      <p>
+        你的浏览器不支持 ES Modules（现代浏览器均支持）。请使用 Chrome / Edge / Firefox / Safari
+        的较新版本打开本页。
+      </p>
+    </div>
+
+    <script type="module">
+      import('./js/core/app.js').catch((err) => {
+        console.error('模块加载失败：', err);
+        const box = document.querySelector('.no-module');
+        if (box) box.hidden = false;
+      });
+    </script>
+
+    <noscript>
+      <style>
+        .boot-error {
+          display: block;
+        }
+      </style>
+    </noscript>
+  </body>
+</html>
