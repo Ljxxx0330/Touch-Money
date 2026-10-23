@@ -1,0 +1,38 @@
+GSAP 3.13.0 (GreenSock Animation Platform) —— 本项目内置的第三方动画库
+================================================================
+
+本应用把 GSAP 的核心库以普通脚本的形式内置在
+  js/vendor/gsap.min.js
+（未压缩的源码没有内置；这里用的是官方 npm 包里的 UMD 生产构建）。
+
+来源
+  npm 包 gsap@3.13.0 的 dist/gsap.min.js
+  https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js
+  仓库：https://github.com/greensock/GSAP
+
+内置文件里自带的官方版权头（原文，未改动）
+  /*!
+   * GSAP 3.13.0
+   * https://gsap.com
+   *
+   * @license Copyright 2025, GreenSock. All rights reserved.
+   * Subject to the terms at https://gsap.com/license
+   * @author: Jack Doyle, jack@greensock.com
+   */
+
+许可
+  GSAP 自 3.13 起由 Webflow 支持，整个库对所有用户（含商用）免费。
+  npm 包 package.json 里的 license 字段原文：
+    "Standard 'no charge' license: https://gsap.com/standard-license."
+  条款全文见 https://gsap.com/standard-license （以及内置文件头部注释指向的
+  https://gsap.com/license ）。本应用只做了一件很轻的事：把 gsap.min.js 和本应用
+  一起放在同一个文件夹里分发，并在这里给出署名与出处 —— 没有转售、没有把它包装成
+  独立的动画库产品、也没有声称 GSAP 是本项目写的。
+
+本应用用它做什么
+  钱包里钞票的悬停展开、抽出与找回的飞行、余额数字的滚动（见 js/ui/wallet.js
+  与 js/ui/overlay.js）。
+
+注意
+  本应用没有用到任何需要单独授权的插件（GSAP 的核心库就够用：时间轴、stagger、
+  matchMedia、snap）。如果以后引入官方插件，请重新核对插件的授权范围。

@@ -1,343 +1,330 @@
 /**
- * add-view.js —— 「记一笔」表单 + 「消费感知」确认 + 现金动画。
+ * add-view.js —— 记一笔。
  *
- * 流程：填写 → 校验 → 确认面板（消费前/后余额、本月已消费、剩余预算、占生活费比例）
- *      → 只有点「确认并记录」才写数据 → 动画只是表现层。
+ * 流程是「先填、再看、最后确认」：数据只有在确认之后才写进去。
+ * 取消、关闭模态、按 ESC 都等于没发生，余额一分不会动。
+ * 余额不足只提醒，不阻止——真实花掉的钱必须能记下来。
  */
 
-import { todayKey } from '../core/dates.js';
-import { formatAmount, parseAmountToCents, percentText } from '../core/money.js';
-import { shareOfFee } from '../core/budget.js';
-import { field, categoryChips, toggleField, button, formErrorBox, submitGuard } from '../ui/form.js';
-import { openModal, confirmDialog } from '../ui/modal.js';
+import { card, emptyState, meter } from '../ui/common.js';
+import { field, moneyField, selectField, toggleField, categoryChips, submitGuard, formErrorBox, button, todayInputValue } from '../ui/form.js';
+import { openModal } from '../ui/modal.js';
+import { buildWallet } from '../ui/wallet.js';
 import { playCashAnimation } from '../ui/overlay.js';
-import { card, moneyNode } from '../ui/common.js';
+import { icon } from '../ui/icons.js';
+import { CATEGORIES } from '../core/budget.js';
+import { spendBills } from '../core/notes.js';
+import { formatAmount, parseAmountToCents, toPercent, percentText } from '../core/money.js';
 
-export function renderAddView(container, ctx) {
-  const state = ctx.getState();
+/** 小工具：建元素 */
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+/** 确认页里的小格子（.confirm-grid > .confirm-cell） */
+function confirmCell(label, value, kind) {
+  const cell = el('div', `confirm-cell${kind ? ' is-' + kind : ''}`);
+  cell.appendChild(el('span', null, label));
+  cell.appendChild(el('b', null, value));
+  return cell;
+}
+
+/**
+ * 消费感知确认：把这笔钱离开钱包之后的样子摆在你面前。
+ * @param {{amountCents:number, title:string, category:string, date:string,
+ *            note:string, isNonEssential:boolean}} draft
+ * @param {object} ctx
+ * @returns {Promise<boolean>} true = 确认并记录
+ */
+export function openRecordConfirm(draft, ctx) {
   const view = ctx.getBudgetView();
-  const configured = ctx.isConfigured();
+  const before = view.balanceCents;
+  const after = before - draft.amountCents;
+  const spentAfter = view.monthSpentCents + draft.amountCents;
+  const leftAfter = view.remainingCents - draft.amountCents;
+  const share = view.monthlyFeeCents > 0 ? draft.amountCents / view.monthlyFeeCents : 0;
+  const label = ctx.categoryLabel(draft.category);
 
-  const frag = document.createDocumentFragment();
+  const body = el('div');
 
-  if (!configured) {
-    const notice = document.createElement('p');
-    notice.className = 'notice-inline';
-    notice.textContent = '还没有设置本月生活费。你可以先记账（余额会变成负数，代表超出计划），也可以先去设定生活费。';
-    const row = document.createElement('div');
-    row.className = 'btn-row';
-    row.appendChild(button('去设置生活费', { kind: 'primary', onClick: () => ctx.navigate('budget') }));
-    frag.appendChild(notice);
-    frag.appendChild(row);
+  // 顶部：这笔钱是什么、多少钱
+  const top = el('div', 'confirm-top');
+  top.appendChild(el('span', 'confirm-name', draft.title));
+  top.appendChild(el('span', 'confirm-meta', `${label} · ${draft.date}${draft.isNonEssential ? ' · 非必需' : ''}`));
+  top.appendChild(el('span', 'confirm-amt', `-${formatAmount(draft.amountCents)}`));
+  body.appendChild(top);
+
+  // 中间：一只钱包。堆里参与这笔的那几种面额就是「这笔要动的钱」，不再另摆一层示意。
+  // 收起时它们和别的钞票一样塞在袋口里；鼠标放上去这几张抬回原位（= 先飞出去一半），
+  // 不再摆「消费前 / 消费后」两只小钱包：挤在一起太乱，而且小到你看不出差别。
+  // 点确认之后这几张整个飞出去；找回属于钱包内部重新数一遍，不演成飞回来。
+  const stage = el('div', 'cash-stage');
+  const wallet = buildWallet({ balanceCents: before, showComposition: true });
+  stage.appendChild(wallet.wrap);
+  // 要动哪几张由这笔钱自己决定：花了多少就按这笔钱的最少张数拆法去抽。
+  // 不再看钱包新旧构成的差 —— 那会把本来不花的整沓也算成「要动的钱」，
+  // 于是你花 98 元却看见好几张 ¥100 一起展开。
+  wallet.setTransaction(draft.amountCents);
+  body.appendChild(stage);
+
+  const note = el('p', 'compare-note', `放在钱包上，要动的那几张会抬起来给你看；点确认之后它们整个飞出去。确认之后：可支配余额 ${formatAmount(before)} 元 → ${formatAmount(after)} 元。`);
+  body.appendChild(note);
+
+  if (after < 0) {
+    const warn = el('p', 'live-preview is-warn', '余额会不足，但这笔消费是真实发生的，触钱不会阻止你记录它。');
+    body.appendChild(warn);
   }
 
-  const { section, body } = card({ title: '这一笔花在了哪里' });
+  // 下面：本月口径的四个数字，确认前再看一遍
+  const grid = el('div', 'confirm-grid');
+  grid.appendChild(confirmCell('本月初始生活费', `${formatAmount(view.monthlyFeeCents)} 元`, 'fee'));
+  grid.appendChild(confirmCell('本月已消费（含这笔）', `${formatAmount(spentAfter)} 元`, 'spent'));
+  grid.appendChild(confirmCell('本月剩余预算（含这笔）', `${formatAmount(leftAfter)} 元`, 'left'));
+  grid.appendChild(confirmCell('当前可支配余额', `${formatAmount(after)} 元`, 'balance'));
+  body.appendChild(grid);
 
-  const amountField = field({
+  // 这笔占本月生活费的百分之几：用条表示，比纯数字好读
+  const shareBar = meter(share, {
+    label: `本笔占本月初始生活费（${formatAmount(view.monthlyFeeCents)} 元）的 ${percentText(toPercent(draft.amountCents, view.monthlyFeeCents))}%`,
+    detail: `${formatAmount(draft.amountCents)} 元`,
+  });
+  shareBar.wrap.style.marginTop = '14px';
+  body.appendChild(shareBar.wrap);
+  body.appendChild(el('p', 'share-note', '确认之后才会写进记录；返回修改或关掉这个窗口，余额都不会变。'));
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    // 模态一关（无论什么方式）都要拆掉钱包，别留下悬空动画定时器
+    const cleanup = () => {
+      try {
+        wallet.destroy();
+      } catch (err) {
+        console.warn('钱包清理失败：', err);
+      }
+    };
+
+    openModal({
+      title: '确认这笔消费',
+      sub: '先看清楚这笔钱离开钱包之后的样子，再决定要不要记下来。',
+      body,
+      wide: true,
+      onClose: () => { cleanup(); settle(false); },
+      buttons: [
+        { text: '返回修改', kind: 'ghost', onClick: (h) => { settle(false); h.close('back'); } },
+        { text: '确认并记录', kind: 'primary', onClick: (h) => { settle(true); h.close('confirm'); } },
+      ],
+    });
+  });
+}
+
+export function renderAddView(content, ctx) {
+  const state = ctx.getState();
+  if (!ctx.isConfigured()) {
+    const intro = card({
+      title: '先设定每月生活费',
+      sub: '有了基准，「记一笔」才知道这笔钱占了多少预算。',
+    });
+    intro.body.appendChild(emptyState(
+      '你还没设过生活费。设好之后再来记账，这里会实时显示消费后的余额。',
+      button('去设定生活费', { kind: 'primary', icon: 'coin', onClick: () => ctx.navigate('budget') }),
+      'coin',
+    ));
+    content.appendChild(intro.section);
+    return;
+  }
+
+  const view = ctx.getBudgetView();
+
+  /* ---------------- 左边：填这笔消费 ---------------- */
+  const amount = moneyField({
     label: '金额（元）',
-    type: 'text',
-    inputmode: 'decimal',
-    placeholder: '例如 18.00',
-    required: true,
-    hint: '最多两位小数，金额一律以「分」为单位保存，不会有浮点误差。',
+    placeholder: '18.00',
+    hint: '支持两位小数。金额以「分」保存，不会因为浮点数丢掉零头。',
   });
-  amountField.input.setAttribute('data-autofocus', '');
-  amountField.input.setAttribute('autocomplete', 'off');
-  body.appendChild(amountField.wrap);
-
-  const titleField = field({
-    label: '消费名称',
-    type: 'text',
-    maxlength: 60,
-    placeholder: '例如 食堂午饭',
-    required: true,
+  amount.wrap.classList.add('field-amount');
+  const title = field({ label: '这笔钱花在哪', maxlength: 40, placeholder: '楼下便利店' });
+  const chips = categoryChips({
+    label: '分类',
+    categories: CATEGORIES,
+    value: 'food',
   });
-  body.appendChild(titleField.wrap);
-
-  const chips = categoryChips({ label: '分类', value: 'food' });
-  body.appendChild(chips.wrap);
-
-  const dateField = field({
-    label: '日期',
-    type: 'date',
-    value: todayKey(),
-    required: true,
-    hint: '默认今天。日期按本地时区统计，不会因为时区换算跑错月份。',
-  });
-  dateField.input.max = todayKey();
-  body.appendChild(dateField.wrap);
-
-  const noteField = field({
-    label: '备注（可选）',
-    type: 'text',
-    maxlength: 200,
-    placeholder: '一句话记下当时的情形',
-  });
-  body.appendChild(noteField.wrap);
-
+  const date = field({ label: '日期', type: 'date', value: todayInputValue() });
+  date.input.max = todayInputValue();
+  const note = field({ label: '备注', type: 'textarea', maxlength: 120, optionalLabel: '可留空', placeholder: '和同学拼的单。' });
   const nonEssential = toggleField({
-    label: '这笔不是必需的吗？',
-    hint: '只是给自己一个提示，统计里会单独看它，不会阻止你记录。',
-    checked: false,
-    onChange: () => {},
-    onText: '标记为非必需',
-    offText: '视为必需',
+    label: '这笔不是必需的',
+    hint: '标上它，统计里会单独算「非必需支出」，余额不受影响。',
   });
-  body.appendChild(nonEssential.wrap);
 
-  const preview = document.createElement('div');
-  preview.className = 'live-preview';
-  const previewText = document.createElement('p');
-  previewText.className = 'live-preview-text';
-  preview.appendChild(previewText);
-  body.appendChild(preview);
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.append(amount.wrap, title.wrap, chips.wrap, date.wrap, note.wrap, nonEssential.wrap);
+  const error = formErrorBox();
+  form.appendChild(error.el);
 
-  const formErr = formErrorBox();
-  body.appendChild(formErr.el);
-
-  const actions = document.createElement('div');
-  actions.className = 'btn-row';
-  const submit = button('确认这笔消费', { kind: 'primary', type: 'submit' });
-  actions.appendChild(submit);
-  const reset = button('清空', {
-    kind: 'ghost',
-    onClick: () => {
-      amountField.input.value = '';
-      titleField.input.value = '';
-      noteField.input.value = '';
-      dateField.input.value = todayKey();
-      chips.setValue('food');
-      nonEssential.input.checked = false;
-      nonEssential.renderState();
-      amountField.clearError();
-      titleField.clearError();
-      formErr.show('');
-      renderPreview();
-      amountField.input.focus();
-    },
-  });
-  actions.appendChild(reset);
-  body.appendChild(actions);
-
-  const form = document.createElement('form');
-  form.className = 'stack';
-  while (body.firstChild) form.appendChild(body.firstChild);
+  const submit = button('下一步：确认这笔消费', { kind: 'primary', icon: 'arrowRight', type: 'submit', block: true });
+  const reset = button('清空', { kind: 'plain', icon: 'close', type: 'button' });
+  const actions = el('div', 'btn-row');
+  actions.style.marginTop = '4px';
+  actions.classList.add('sticky-actions');
+  actions.append(submit, reset);
   form.appendChild(actions);
-  body.appendChild(form);
 
+  const formCard = card({
+    title: '这笔消费',
+    sub: '金额和名称是必填的，其他都可以先放着。',
+  });
+  formCard.body.appendChild(form);
+  // 宽屏时表单在左、实时预览在右（.split 在 ≤1040px 自动变单列）；
+  // 这里先只建容器，等 previewCard 建好再一起挂进 content。
+  const split = el('div', 'split');
+
+  /* ---------------- 右边：这笔钱离开钱包之后的样子 ---------------- */
+  const previewCard = card({ title: '确认之前，先看一眼', headingLevel: 3 });
+  const compare = el('div', 'compare');
+  compare.style.margin = '0 0 14px';
+  const colBefore = el('div', 'compare-col');
+  colBefore.appendChild(el('span', 'compare-label', '现在'));
+  const beforeValue = el('b', 'stat-value', formatAmount(view.balanceCents));
+  colBefore.appendChild(beforeValue);
+  compare.appendChild(colBefore);
+  const arrow = el('span', 'compare-arrow');
+  arrow.appendChild(icon('arrowRight', { size: 18 }));
+  compare.appendChild(arrow);
+  const colAfter = el('div', 'compare-col compare-after');
+  colAfter.appendChild(el('span', 'compare-label', '这笔之后'));
+  const afterValue = el('b', 'stat-value', formatAmount(view.balanceCents));
+  colAfter.appendChild(afterValue);
+  compare.appendChild(colAfter);
+  previewCard.body.appendChild(compare);
+
+  const live = el('p', 'live-preview', '');
+  previewCard.body.appendChild(live);
+
+  const budgetMeter = meter(view.usedRatio, {
+    label: '本月预算使用',
+    detail: `${percentText(toPercent(view.monthSpentCents, view.monthlyFeeCents))}%`,
+    note: `本月初始生活费 ${formatAmount(view.monthlyFeeCents)} 元 · 已消费 ${formatAmount(view.monthSpentCents)} 元 · 剩余 ${formatAmount(view.remainingCents)} 元`,
+  });
+  budgetMeter.wrap.style.marginTop = '14px';
+  previewCard.body.appendChild(budgetMeter.wrap);
+
+  const hint = el('p', 'field-hint', '输入金额后，这里会实时显示消费后的余额与预算。它只是预览，不会写进任何数据。');
+  hint.style.marginTop = '12px';
+  previewCard.body.appendChild(hint);
+
+  split.append(formCard.section, previewCard.section);
+  content.appendChild(split);
+
+  /** 金额一变就重算预览：口径和确认页完全一致，避免「预览和确认不一样」 */
   function renderPreview() {
-    const parsed = parseAmountToCents(amountField.input.value);
+    const parsed = parseAmountToCents(amount.getValue());
     if (!parsed.ok) {
-      previewText.textContent = `当前可支配余额 ¥${formatAmount(view.balanceCents)} · 输入金额后这里会显示消费后的余额`;
-      preview.classList.remove('is-negative');
+      afterValue.textContent = formatAmount(view.balanceCents);
+      live.classList.remove('is-warn', 'is-danger');
+      live.textContent = '输入一个有效金额之后，这里会告诉你这笔钱花掉之后还剩多少。';
+      budgetMeter.setRatio(view.usedRatio);
       return;
     }
     const after = view.balanceCents - parsed.cents;
-    previewText.textContent =
-      `消费后余额：¥${formatAmount(view.balanceCents)} → ¥${formatAmount(after)}` +
-      (after < 0 ? ' · 会透支' : '');
-    preview.classList.toggle('is-negative', after < 0);
+    const spent = view.monthSpentCents + parsed.cents;
+    const left = view.remainingCents - parsed.cents;
+    beforeValue.textContent = formatAmount(view.balanceCents);
+    afterValue.textContent = formatAmount(after);
+    budgetMeter.setRatio(view.monthlyFeeCents > 0 ? spent / view.monthlyFeeCents : 0);
+    live.classList.remove('is-warn', 'is-danger');
+    if (after < 0) {
+      live.classList.add('is-danger');
+      live.textContent = `余额会不足 ${formatAmount(-after)} 元。这笔钱你已经花出去了，触钱照样让你记下来。`;
+    } else if (left < 0) {
+      live.classList.add('is-warn');
+      live.textContent = `本月预算会用超 ${formatAmount(-left)} 元，余额还有 ${formatAmount(after)} 元（带着往期的结余）。`;
+    } else {
+      live.textContent = `本月已消费 ${formatAmount(view.monthSpentCents)} → ${formatAmount(spent)} 元 · 剩余预算 ${formatAmount(view.remainingCents)} → ${formatAmount(left)} 元`;
+    }
   }
-
-  amountField.input.addEventListener('input', renderPreview);
+  amount.input.addEventListener('input', renderPreview);
   renderPreview();
 
-  let submitting = false;
-
+  /* ---------------- 提交 ---------------- */
   const onSubmit = submitGuard(async (event) => {
     event.preventDefault();
-    if (submitting) return;
+    error.hide();
 
-    amountField.clearError();
-    titleField.clearError();
-    formErr.show('');
+    const parsed = parseAmountToCents(amount.getValue());
+    if (!parsed.ok) { amount.setError(parsed.error); amount.input.focus(); return; }
+    if (!title.input.value.trim()) { title.setError('给它起个名字，日后才认得出来'); title.input.focus(); return; }
+    if (!date.input.value) { date.setError('选一个日期'); date.input.focus(); return; }
 
-    const parsed = parseAmountToCents(amountField.input.value);
-    if (!parsed.ok) {
-      amountField.setError(parsed.error);
-      amountField.input.focus();
-      return;
-    }
-    const title = titleField.input.value.trim();
-    if (!title) {
-      titleField.setError('请填写消费名称');
-      titleField.input.focus();
-      return;
-    }
-    const date = dateField.input.value;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      dateField.setError('请选择有效日期');
-      return;
-    }
+    const draft = {
+      amountCents: parsed.cents,
+      title: title.input.value.trim(),
+      category: chips.getValue(),
+      date: date.input.value,
+      note: note.input.value.trim(),
+      isNonEssential: nonEssential.input.checked,
+    };
 
-    submitting = true;
     submit.disabled = true;
     submit.textContent = '正在确认…';
-
-    const category = chips.getValue();
-    const note = noteField.input.value.trim();
-    const isNonEssential = nonEssential.input.checked;
-
+    let confirmed = false;
     try {
-      await openConfirm({
-        amountCents: parsed.cents,
-        title,
-        category,
-        date,
-        note,
-        isNonEssential,
-      });
+      confirmed = await openRecordConfirm(draft, ctx);
     } finally {
-      submitting = false;
       submit.disabled = false;
-      submit.textContent = '确认这笔消费';
+      submit.textContent = '下一步：确认这笔消费';
     }
+    if (!confirmed) return;
+
+    const result = ctx.actions.addRecord({
+      amount: draft.amountCents,
+      title: draft.title,
+      category: draft.category,
+      date: draft.date,
+      note: draft.note,
+      isNonEssential: draft.isNonEssential,
+    });
+    if (!result || !result.ok) {
+      error.show((result && result.error) || '保存失败，这笔消费没有写进去。');
+      return;
+    }
+
+    // 数据已经落库，动画只是让人「看见」；动画失败也不影响这笔账。
+    const after = view.balanceCents - draft.amountCents;
+    await playCashAnimation({
+      amountCents: draft.amountCents,
+      beforeCents: view.balanceCents,
+      afterCents: after,
+      title: draft.title,
+      categoryLabel: ctx.categoryLabel(draft.category),
+      direction: 'out',
+    });
+    ctx.toastSuccess(`已记录：${draft.title} ${formatAmount(draft.amountCents)} 元 · 余额 ${formatAmount(after)} 元`);
+    ctx.navigate('wallet');
   });
 
   form.addEventListener('submit', onSubmit);
 
-  /** 消费感知确认面板。返回 true 表示已保存。 */
-  function openConfirm(payload) {
-    const before = ctx.getBudgetView();
-    const afterBalance = before.balanceCents - payload.amountCents;
-    const afterSpent = before.monthSpentCents + payload.amountCents;
-    const afterRemaining = before.remainingCents - payload.amountCents;
-    const share = shareOfFee(payload.amountCents, before.monthlyFeeCents);
-    const sharePercent = percentText(share * 100);
+  reset.addEventListener('click', () => {
+    form.reset();
+    chips.setValue('food');
+    nonEssential.renderState();
+    amount.clearError();
+    title.clearError();
+    date.clearError();
+    error.hide();
+    date.input.value = todayInputValue();
+    renderPreview();
+    amount.input.focus();
+  });
 
-    return new Promise((resolve) => {
-      let saved = false;
-      const wrap = document.createElement('div');
-      wrap.className = 'confirm-panel';
-
-      const lead = document.createElement('p');
-      lead.className = 'confirm-lead';
-      lead.textContent = '先看清楚这笔钱离开钱包之后的样子，再决定要不要记下来。';
-      wrap.appendChild(lead);
-
-      const hero = document.createElement('div');
-      hero.className = 'confirm-hero';
-      const heroTitle = document.createElement('p');
-      heroTitle.className = 'confirm-hero-title';
-      heroTitle.textContent = payload.title;
-      hero.appendChild(heroTitle);
-      hero.appendChild(moneyNode(payload.amountCents, { sign: '-', className: 'confirm-hero-amount' }));
-      const heroMeta = document.createElement('p');
-      heroMeta.className = 'record-meta';
-      heroMeta.textContent = `${ctx.categoryLabel(payload.category)} · ${payload.date}${payload.isNonEssential ? ' · 非必需' : ''}`;
-      hero.appendChild(heroMeta);
-      wrap.appendChild(hero);
-
-      const grid = document.createElement('dl');
-      grid.className = 'confirm-grid';
-      grid.appendChild(gridItem('消费前余额', `¥${formatAmount(before.balanceCents)}`));
-      grid.appendChild(gridItem('消费后余额', `¥${formatAmount(afterBalance)}`, afterBalance < 0));
-      grid.appendChild(gridItem('本月已消费', `¥${formatAmount(afterSpent)}`));
-      grid.appendChild(gridItem('本月剩余预算', `¥${formatAmount(afterRemaining)}`, afterRemaining < 0));
-      wrap.appendChild(grid);
-
-      const shareBox = document.createElement('div');
-      shareBox.className = 'confirm-share';
-      const shareLabel = document.createElement('p');
-      shareLabel.className = 'confirm-share-label';
-      shareLabel.textContent = before.monthlyFeeCents > 0
-        ? `本笔占本月初始生活费（¥${formatAmount(before.monthlyFeeCents)}）的 ${sharePercent}%`
-        : '尚未设置本月初始生活费，暂时无法计算占比';
-      shareBox.appendChild(shareLabel);
-      if (before.monthlyFeeCents > 0) {
-        const bar = document.createElement('div');
-        bar.className = 'confirm-share-bar';
-        const fill = document.createElement('div');
-        fill.className = 'confirm-share-fill';
-        fill.style.width = `${Math.max(1, Math.min(100, sharePercent))}%`;
-        bar.appendChild(fill);
-        shareBox.appendChild(bar);
-      }
-      wrap.appendChild(shareBox);
-
-      if (afterBalance < 0) {
-        const warn = document.createElement('p');
-        warn.className = 'notice-inline notice-warn';
-        warn.textContent = '余额会不足，但这笔消费是真实发生的，触钱不会阻止你记录它。';
-        wrap.appendChild(warn);
-      }
-
-      const handle = openModal({
-        title: '确认这笔消费',
-        body: wrap,
-        closeOnEsc: true,
-        buttons: [
-          {
-            text: '返回修改',
-            kind: 'ghost',
-            onClick: (h) => h.close('back'),
-          },
-          {
-            text: '确认并记录',
-            kind: 'primary',
-            onClick: async (h) => {
-              h.close('confirm');
-              const res = ctx.actions.addRecord({
-                amount: payload.amountCents,
-                title: payload.title,
-                category: payload.category,
-                date: payload.date,
-                note: payload.note,
-                isNonEssential: payload.isNonEssential,
-              });
-              if (!res.ok) {
-                ctx.toastError(res.error || '保存失败');
-                resolve(false);
-                return;
-              }
-              saved = true;
-              // 数据已经保存，下面只是把它「演」出来；动画失败也不影响结果。
-              try {
-                await playCashAnimation({
-                  amountCents: payload.amountCents,
-                  beforeCents: before.balanceCents,
-                  afterCents: afterBalance,
-                  title: payload.title,
-                  categoryLabel: ctx.categoryLabel(payload.category),
-                });
-              } catch (err) {
-                console.warn('现金动画异常：', err);
-              }
-              ctx.toastSuccess(`已记录：${payload.title} ¥${formatAmount(payload.amountCents)} · 余额 ¥${formatAmount(afterBalance)}`);
-              ctx.navigate('wallet');
-              resolve(true);
-            },
-          },
-        ],
-        onClose: (reason) => {
-          if (!saved) resolve(false);
-        },
-      });
-      void handle;
-    });
-  }
-
-  frag.appendChild(section);
-
-  const hint = document.createElement('p');
-  hint.className = 'muted-note';
-  hint.textContent = '触钱不收集支付密码、银行卡密码或微信支付凭证，也不连接任何支付系统。';
-  frag.appendChild(hint);
-
-  container.appendChild(frag);
-  return { focus: () => amountField.input.focus() };
-}
-
-function gridItem(label, value, negative = false) {
-  const item = document.createElement('div');
-  item.className = 'confirm-item';
-  const dt = document.createElement('dt');
-  dt.className = 'confirm-label';
-  dt.textContent = label;
-  const dd = document.createElement('dd');
-  dd.className = `confirm-value${negative ? ' is-negative' : ''}`;
-  dd.textContent = value;
-  item.appendChild(dt);
-  item.appendChild(dd);
-  return item;
+  amount.input.focus();
 }

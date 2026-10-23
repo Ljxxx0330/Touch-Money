@@ -1,11 +1,13 @@
 /**
- * toast.js —— 轻量操作反馈（成功 / 错误 / 提示）。
- * 与顶部 notices 的区别：toast 是一次性的即时反馈，notices 是需要持续看到的状态提示。
+ * toast.js —— 轻提示：出现在屏幕下方，几秒后自动退场，可以点掉。
+ * 提示只是补充说明，重要信息不会只靠颜色区分（每条都带图标与文字）。
  */
 
-const LEVELS = { info: '提示', success: '成功', error: '错误', warn: '注意' };
+import { icon } from './icons.js';
 
-function container() {
+const LEVEL_ICONS = { info: 'info', success: 'check', error: 'close', warn: 'info' };
+
+function root() {
   let el = document.getElementById('toast-root');
   if (!el) {
     el = document.createElement('div');
@@ -18,61 +20,44 @@ function container() {
 }
 
 /**
- * @param {string} text
- * @param {{level?:'info'|'success'|'error'|'warn', duration?:number}} [opts]
- * @returns {() => void} 手动关闭函数
+ * 弹一条提示。
+ * @param {string} text @param {{level?: 'info'|'success'|'error'|'warn', duration?: number}} [opts]
+ * @returns {() => void} dismiss
  */
 export function toast(text, opts = {}) {
-  const level = LEVELS[opts.level] ? opts.level : 'info';
-  const duration = opts.duration === undefined ? (level === 'error' ? 5000 : 2600) : opts.duration;
+  const level = ['info', 'success', 'error', 'warn'].includes(opts.level) ? opts.level : 'info';
+  const duration = opts.duration === undefined ? (level === 'error' || level === 'warn' ? 5000 : 2600) : Math.max(0, Number(opts.duration) || 0);
 
-  const root = container();
   const el = document.createElement('div');
   el.className = `toast toast-${level}`;
-
-  const badge = document.createElement('span');
-  badge.className = 'toast-badge';
-  badge.textContent = LEVELS[level];
-  el.appendChild(badge);
-
+  const mark = document.createElement('span');
+  mark.setAttribute('aria-hidden', 'true');
+  mark.appendChild(icon(LEVEL_ICONS[level], { size: 18 }));
+  el.appendChild(mark);
   const msg = document.createElement('span');
-  msg.className = 'toast-text';
   msg.textContent = String(text === undefined || text === null ? '' : text);
   el.appendChild(msg);
-
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'toast-close';
+  close.setAttribute('aria-label', '关闭这条提示');
   close.textContent = '×';
-  close.setAttribute('aria-label', '关闭提示');
+  close.addEventListener('click', () => dismiss());
   el.appendChild(close);
+
+  root().appendChild(el);
 
   let done = false;
   const dismiss = () => {
     if (done) return;
     done = true;
     clearTimeout(timer);
-    el.classList.add('toast-leaving');
-    const kill = () => {
-      if (el.parentNode) el.parentNode.removeChild(el);
-    };
-    if (prefersReduced()) kill();
-    else setTimeout(kill, 220);
+    el.classList.add('is-leaving');
+    const kill = () => { if (el.parentNode) el.parentNode.removeChild(el); };
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) kill();
+    else { el.addEventListener('animationend', kill, { once: true }); setTimeout(kill, 320); }
   };
-  const timer = duration > 0 ? setTimeout(dismiss, duration) : null;
-  close.addEventListener('click', dismiss);
-
-  root.appendChild(el);
-  while (root.children.length > 3) root.removeChild(root.firstChild);
+  const timer = duration > 0 ? setTimeout(dismiss, duration) : 0;
   return dismiss;
-
-  function prefersReduced() {
-    try {
-      return window.matchMedia('(prefers-reduced-motion: reduce)').matches === true;
-    } catch {
-      return false;
-    }
-  }
 }
 
 export const toastSuccess = (text, opts = {}) => toast(text, { ...opts, level: 'success' });

@@ -1,277 +1,352 @@
 /**
- * wallet-view.js —— 首页「我的钱包」：以虚拟钱包为视觉中心。
- * 未设置生活费时显示初始化引导，不展示会被误读为真实余额的数字。
+ * wallet-view.js —— 手机页的第一屏「我的钱包」。
+ *
+ * 一屏里从上到下：本月初始生活费（可以直接改）→ 已消费 / 剩余预算 →
+ * 装着真实面额纸币的钱包（余额写在钱包自己的金属牌上）→ 预算使用进度 →
+ * 「记一笔」大按钮 → 今日消费 → 最近消费 → 想买的东西。
+ *
+ * 四个数字各归其位，不混用：初始生活费 / 已消费 / 剩余预算 / 可支配余额。
+ * 没有设定生活费时先走初始化引导，不显示任何猜出来的余额。
  */
 
-import { humanDate, humanPeriod, todayKey } from '../core/dates.js';
-import { formatAmount, toPercent, parseAmountToCents, percentText } from '../core/money.js';
 import { buildWallet } from '../ui/wallet.js';
-import { card, emptyState, linkButton, moneyNode, recordRow } from '../ui/common.js';
-import { field, button } from '../ui/form.js';
+import { card, moneyNode, recordRow, emptyState, meter } from '../ui/common.js';
+import { button, moneyField, submitGuard } from '../ui/form.js';
+import { icon } from '../ui/icons.js';
+import { formatAmount, formatCents, percentText, toPercent, parseAmountToCents } from '../core/money.js';
 
+/** 小工具：建元素 */
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
 
-export function renderWalletView(container, ctx) {
-  const state = ctx.getState();
-  const view = ctx.getBudgetView();
-  const configured = ctx.isConfigured();
-  const frag = document.createDocumentFragment();
-  const walletHost = document.createElement('div');
-  walletHost.className = 'wallet-host';
+/** 卡片头右侧那种小链接按钮（card() 的 action 需要一个现成节点） */
+function linkButtonSafe(text, onClick) {
+  const node = el('button', 'link-btn', text);
+  node.type = 'button';
+  node.addEventListener('click', onClick);
+  return node;
+}
 
-  /* ---------- 初始化引导 ---------- */
-  if (!configured) {
-    frag.appendChild(onboardingCard(ctx));
-    const hint = document.createElement('p');
-    hint.className = 'muted-note';
-    hint.textContent = '设置本月生活费后，这里才会显示余额与预算。触钱不会猜测你的真实余额。';
-    frag.appendChild(hint);
-    container.appendChild(frag);
-    return { focus: () => {} };
-  }
-
-  /* ---------- 钱包主视觉 ---------- */
-  const walletCard = document.createElement('section');
-  walletCard.className = 'card wallet-card';
-
-  const wallet = buildWallet({
-    balanceCents: view.balanceCents,
-    periodLabel: humanPeriod(view.periodStart, view.cycleDay),
+/** 引导页的原创图形：三张扇开的纸币，不暗示任何真实余额 */
+function onboardArt() {
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 320 210');
+  svg.setAttribute('class', 'onboard-art');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', '三张扇开的纸币图形');
+  const notes = [
+    { rot: -16, fill: 'var(--note-teal)', light: '#94c3c9' },
+    { rot: -4, fill: 'var(--note-gold)', light: '#e6c68f' },
+    { rot: 9, fill: 'var(--note-red)', light: '#e59384' },
+  ];
+  notes.forEach((note, index) => {
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('transform', `rotate(${note.rot} 160 118)`);
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', String(58 + index * 6));
+    rect.setAttribute('y', String(64 + index * 12));
+    rect.setAttribute('width', '204');
+    rect.setAttribute('height', '96');
+    rect.setAttribute('rx', '10');
+    rect.setAttribute('fill', note.fill);
+    rect.setAttribute('stroke', 'rgba(13, 32, 19, 0.28)');
+    rect.setAttribute('stroke-width', '1.5');
+    g.appendChild(rect);
+    const inner = document.createElementNS(SVG_NS, 'rect');
+    inner.setAttribute('x', String(66 + index * 6));
+    inner.setAttribute('y', String(72 + index * 12));
+    inner.setAttribute('width', '188');
+    inner.setAttribute('height', '80');
+    inner.setAttribute('rx', '6');
+    inner.setAttribute('fill', 'none');
+    inner.setAttribute('stroke', note.light);
+    inner.setAttribute('stroke-width', '1.4');
+    inner.setAttribute('stroke-dasharray', '5 4');
+    g.appendChild(inner);
+    const face = document.createElementNS(SVG_NS, 'circle');
+    face.setAttribute('cx', String(96 + index * 6));
+    face.setAttribute('cy', String(112 + index * 12));
+    face.setAttribute('r', '20');
+    face.setAttribute('fill', note.light);
+    face.setAttribute('opacity', '0.75');
+    g.appendChild(face);
+    svg.appendChild(g);
   });
-  walletHost.appendChild(wallet.root);
-  walletCard.appendChild(walletHost);
+  return svg;
+}
 
-  if (view.carryOver && view.carryInCents !== 0) {
-    const carry = document.createElement('p');
-    carry.className = view.carryInCents >= 0 ? 'carry-note' : 'carry-note carry-note-negative';
-    carry.textContent =
-      view.carryInCents >= 0
-        ? `上一期结余结转 ¥${moneyTextAbs(view.carryInCents)}`
-        : `上一期透支 ¥${moneyTextAbs(view.carryInCents)}`;
-    walletCard.appendChild(carry);
-  }
+/** 首次打开：只问一件事——这个月的生活费 */
+function renderOnboard(content, ctx) {
+  const wrap = el('div', 'onboard');
+  wrap.setAttribute('role', 'region');
+  wrap.setAttribute('aria-label', '初始化引导');
 
-  const trio = document.createElement('dl');
-  trio.className = 'trio';
-  trio.appendChild(trioItem('本月初始生活费', view.monthlyFeeCents));
-  trio.appendChild(trioItem('本月已消费', view.monthSpentCents));
-  trio.appendChild(trioItem('本月剩余预算', view.remainingCents, view.remainingCents < 0));
-  walletCard.appendChild(trio);
+  const left = el('div');
+  left.appendChild(el('p', 'hero-kicker', 'TOUCHMONEY · 触钱'));
+  left.appendChild(el('h2', null, '先设定这个月的生活费'));
+  left.appendChild(el('p', 'onboard-lead', '触钱不会猜测你的真实余额。写下这个月你打算用多少钱生活，之后每一笔消费都会从里面离开，你能看见它离开的样子。'));
 
-  const overBudget = view.remainingCents < 0;
-  const percent = percentText(toPercent(view.monthSpentCents, view.monthlyFeeCents));
-  walletCard.appendChild(
-    budgetProgress(view, percent, overBudget),
-  );
-
-  frag.appendChild(walletCard);
-
-  /* ---------- 快捷操作 ---------- */
-  const actions = document.createElement('div');
-  actions.className = 'quick-actions';
-  actions.appendChild(button('记一笔', { kind: 'primary', onClick: () => ctx.navigate('add') }));
-  actions.appendChild(button('生活费设置', { kind: 'ghost', onClick: () => ctx.navigate('budget') }));
-  actions.appendChild(button('愿望清单', { kind: 'ghost', onClick: () => ctx.navigate('wishlist') }));
-  frag.appendChild(actions);
-
-  /* ---------- 今日消费 ---------- */
-  const tKey = todayKey();
-  const todayRecords = state.records.filter((r) => r.date === tKey);
-  const todayTotal = todayRecords.reduce((sum, r) => sum + r.amount, 0);
-
-  const todayCard = card({ title: '今日消费' });
-  const todayRow = document.createElement('div');
-  todayRow.className = 'today-row';
-  todayRow.appendChild(moneyNode(todayTotal, { sign: '-', className: todayTotal > 0 ? 'today-amount' : 'today-amount today-amount-zero' }));
-  const todayMeta = document.createElement('span');
-  todayMeta.className = 'record-meta';
-  todayMeta.textContent = todayRecords.length
-    ? `${todayRecords.length} 笔 · ${todayRecords.filter((r) => r.isNonEssential).length} 笔标记为非必需`
-    : '今天还没有记账';
-  todayRow.appendChild(todayMeta);
-  todayCard.body.appendChild(todayRow);
-  frag.appendChild(todayCard.section);
-
-  /* ---------- 最近消费 ---------- */
-  const recent = ctx.sortedRecords(state.records).slice(0, 6);
-  const recentCard = card({
-    title: '最近消费',
-    action: linkButton('查看全部', () => ctx.navigate('records')),
+  const amount = moneyField({
+    label: '本月初始生活费（元）',
+    placeholder: '2000.00',
+    hint: '按你实际拿到的钱填，可以带零头。之后每个月都可以改。',
   });
-  if (recent.length === 0) {
-    recentCard.body.appendChild(
-      emptyState('还没有消费记录', button('记第一笔', { kind: 'primary', onClick: () => ctx.navigate('add') })),
-    );
-  } else {
-    const list = document.createElement('ul');
-    list.className = 'record-list';
-    for (const r of recent) {
-      const li = document.createElement('li');
-      const row = recordRow(r, (rec) => ctx.openRecordDetail(rec));
-      const time = document.createElement('span');
-      time.className = 'record-date';
-      time.textContent = humanDate(r.date);
-      row.insertBefore(time, row.lastChild);
-      li.appendChild(row);
-      list.appendChild(li);
+
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.appendChild(amount.wrap);
+
+  const error = el('p', 'form-error');
+  error.hidden = true;
+  form.appendChild(error);
+
+  const actions = el('div', 'hero-actions');
+  const submit = button('开始管理我的生活费', { kind: 'primary', icon: 'arrowRight', type: 'submit', block: true });
+  actions.appendChild(submit);
+  actions.appendChild(button('载入示例数据看看效果', { kind: 'ghost', icon: 'note', onClick: () => ctx.actions.loadDemoData(), block: true }));
+  form.appendChild(actions);
+
+  const steps = el('ul', 'onboard-steps');
+  for (const step of [
+    ['记一笔', '填下金额与名称，确认之后这笔钱才从钱包里离开。'],
+    ['看见重量', '钱包会抽出纸币、找回零钱，余额跟着滚动。'],
+    ['随时调整', '生活费、预算周期、结余结转都可以在生活费页改。'],
+  ]) {
+    const li = el('li');
+    li.appendChild(icon('check', { size: 17 }));
+    const box = el('span');
+    box.appendChild(el('b', null, `${step[0]}：`));
+    box.appendChild(el('span', null, step[1]));
+    li.appendChild(box);
+    steps.appendChild(li);
+  }
+  form.appendChild(steps);
+
+  const submitOnce = submitGuard((event) => {
+    event.preventDefault();
+    const parsed = parseAmountToCents(amount.getValue());
+    if (!parsed.ok) {
+      amount.setError(parsed.error);
+      error.hidden = false;
+      error.textContent = '这个金额我还不能读成钱，请先改一下。';
+      amount.input.focus();
+      return;
     }
-    recentCard.body.appendChild(list);
-  }
-  frag.appendChild(recentCard.section);
-
-  /* ---------- 愿望清单摘要 ---------- */
-  const pending = state.wishlist.filter((w) => w.status === 'pending');
-  const wishCard = card({
-    title: '愿望清单',
-    action: linkButton('管理', () => ctx.navigate('wishlist')),
-  });
-  if (pending.length === 0) {
-    wishCard.body.appendChild(
-      emptyState('还没有想买的东西，先去清单里记下来，冷静一天再决定。', button('添加愿望', { kind: 'ghost', onClick: () => ctx.navigate('wishlist') })),
-    );
-  } else {
-    const ul = document.createElement('ul');
-    ul.className = 'wish-mini';
-    for (const w of pending.slice(0, 3)) {
-      const li = document.createElement('li');
-      const name = document.createElement('span');
-      name.className = 'wish-mini-name';
-      name.textContent = w.name;
-      li.appendChild(name);
-      li.appendChild(moneyNode(w.priceCents, { className: 'wish-mini-price' }));
-      ul.appendChild(li);
+    const result = ctx.actions.setMonthlyFee(parsed.cents);
+    if (!result || !result.ok) {
+      error.hidden = false;
+      error.textContent = (result && result.error) || '保存失败，再试一次。';
+      return;
     }
-    wishCard.body.appendChild(ul);
-    const total = pending.reduce((s, w) => s + w.priceCents, 0);
-    const sum = document.createElement('p');
-    sum.className = 'wish-mini-total';
-    sum.textContent = `${pending.length} 件想买 · 合计 ¥${moneyTextAbs(total)} · 尚未扣款`;
-    wishCard.body.appendChild(sum);
-  }
-  frag.appendChild(wishCard.section);
-
-  container.appendChild(frag);
-  return { focus: () => {}, wallet };
-}
-
-function trioItem(label, cents, negative = false) {
-  const item = document.createElement('div');
-  item.className = 'trio-item';
-  const dt = document.createElement('dt');
-  dt.className = 'trio-label';
-  dt.textContent = label;
-  const dd = document.createElement('dd');
-  dd.className = `trio-value${negative ? ' is-negative' : ''}`;
-  dd.textContent = `¥${moneyTextAbs(cents)}`;
-  item.appendChild(dt);
-  item.appendChild(dd);
-  return item;
-}
-
-function budgetProgress(view, percent, overBudget) {
-  const wrap = document.createElement('div');
-  wrap.className = 'budget-meter';
-  const bar = document.createElement('div');
-  bar.className = `budget-bar${overBudget ? ' is-over' : ''}`;
-  const fill = document.createElement('div');
-  fill.className = 'budget-fill';
-  fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
-  bar.appendChild(fill);
-  wrap.appendChild(bar);
-  const label = document.createElement('p');
-  label.className = 'budget-label';
-  if (view.monthlyFeeCents <= 0) {
-    label.textContent = '尚未设置本月生活费，无法计算预算使用比例。';
-  } else if (overBudget) {
-    label.textContent = `已超出预算 ${percent}% · 超支 ¥${moneyTextAbs(view.remainingCents)}`;
-  } else {
-    label.textContent = `预算已用 ${percent}% · 剩余 ¥${moneyTextAbs(view.remainingCents)}`;
-  }
-  wrap.appendChild(label);
-  return wrap;
-}
-
-function moneyTextAbs(cents) {
-  return formatAmount(Math.abs(Math.round(cents)));
-}
-
-/** 首次打开时的生活费初始化引导。 */
-function onboardingCard(ctx) {
-  const { section, body } = card({ className: 'onboarding-card' });
-
-  const h = document.createElement('h2');
-  h.className = 'onboarding-title';
-  h.textContent = '先设定这个月的生活费';
-  body.appendChild(h);
-
-  const p = document.createElement('p');
-  p.className = 'onboarding-text';
-  p.textContent =
-    '触钱用「虚拟现金」帮你感知资金流动。这里填的是你这个月计划用来消费的金额，不是银行卡里的真实余额，也不需要连接任何支付软件。';
-  body.appendChild(p);
-
-  const amountField = field({
-    label: '本月生活费（元）',
-    type: 'text',
-    inputmode: 'decimal',
-    placeholder: '例如 1500',
-    required: true,
-    hint: '之后可以随时修改，修改时触钱会先告诉你余额会怎么变。',
+    // 视图已经因为写入而重渲染，这里读的是新余额
+    const after = ctx.getBudgetView();
+    ctx.toastSuccess(`本月初始生活费已设为 ${formatCents(parsed.cents)} 元 · 余额 ${formatCents(after.balanceCents)} 元`);
   });
-  amountField.input.setAttribute('data-autofocus', '');
-  body.appendChild(amountField.wrap);
-
-  const err = document.createElement('p');
-  err.className = 'form-error';
-  err.setAttribute('role', 'alert');
-  err.hidden = true;
-  body.appendChild(err);
-
-  const row = document.createElement('div');
-  row.className = 'btn-row';
-
-  const submit = button('开始管理我的生活费', {
-    kind: 'primary',
-    type: 'submit',
-    onClick: () => {
-      const parsed = parseAmountToCents(amountField.input.value);
-      if (!parsed.ok) {
-        amountField.setError(parsed.error);
-        amountField.input.focus();
-        return;
-      }
-      const res = ctx.actions.setMonthlyFee(parsed.cents);
-      if (!res.ok) {
-        err.textContent = res.error;
-        err.hidden = false;
-        return;
-      }
-      ctx.toastSuccess(`本月初始生活费已设为 ¥${formatAmount(parsed.cents)}`);
-      ctx.refresh();
-    },
-  });
-  row.appendChild(submit);
-
-  const demo = button('载入示例数据看看效果', {
-    kind: 'ghost',
-    onClick: () => {
-      ctx.actions.loadDemoData();
-      ctx.refresh();
-    },
-  });
-  row.appendChild(demo);
-  body.appendChild(row);
-
-  amountField.input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
+  form.addEventListener('submit', submitOnce);
+  amount.input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
       submit.click();
     }
   });
 
-  const foot = document.createElement('p');
-  foot.className = 'onboarding-foot';
-  foot.textContent = '所有数据只保存在这台设备的浏览器本地存储里，不会上传，也不连接微信支付或支付宝。';
-  body.appendChild(foot);
+  left.appendChild(form);
+  wrap.appendChild(left);
 
-  return section;
+  const art = el('div');
+  art.appendChild(onboardArt());
+  art.appendChild(el('p', 'muted-note', '设定生活费之后，钱包会按真实面额摆出你剩下的钱；现在它还不存在。'));
+  wrap.appendChild(art);
+
+  content.appendChild(wrap);
+  amount.input.focus();
+}
+
+/** 首屏那张卡：生活费、两个数字、钱包（余额在钱包牌上）、预算进度 */
+function heroCard(view, ctx) {
+  const c = card({ className: 'hero-card', headingLevel: 2 });
+  c.section.setAttribute('aria-label', '钱包与预算概览');
+
+  // 本月初始生活费：设计稿里这一行右边就是「编辑」，这里直接放进生活费页
+  const feeRow = el('div', 'fee-row');
+  const feeBox = el('div');
+  feeBox.appendChild(el('p', 'fee-label', '本月初始生活费'));
+  const feeValue = el('p', 'fee-value');
+  feeValue.appendChild(moneyNode(view.monthlyFeeCents));
+  feeBox.appendChild(feeValue);
+  feeRow.appendChild(feeBox);
+  const edit = el('button', 'fee-edit', '调整');
+  edit.type = 'button';
+  edit.setAttribute('aria-label', '调整本月初始生活费与预算周期');
+  edit.addEventListener('click', () => ctx.navigate('budget'));
+  feeRow.appendChild(edit);
+  c.body.appendChild(feeRow);
+
+  const pair = el('div', 'pair-row');
+  for (const cell of [
+    { label: '本月已消费', cents: view.monthSpentCents, kind: 'pair-spent' },
+    { label: '本月剩余预算', cents: view.remainingCents, kind: 'pair-left' },
+  ]) {
+    const box = el('div', `pair-cell ${cell.kind}`);
+    box.appendChild(el('span', null, cell.label));
+    const b = el('b');
+    b.appendChild(moneyNode(cell.cents));
+    box.appendChild(b);
+    pair.appendChild(box);
+  }
+  c.body.appendChild(pair);
+
+  // 视觉中心：cash-stage 自带展台底纹与透视，钱包站在上面
+  const host = el('div', 'hero-wallet');
+  const stage = el('div', 'cash-stage');
+  const wallet = buildWallet({
+    balanceCents: view.balanceCents,
+    periodLabel: ctx.humanPeriod(view.periodStart, view.cycleDay),
+    showComposition: true,
+  });
+  stage.appendChild(wallet.wrap);
+  host.appendChild(stage);
+  c.body.appendChild(host);
+
+  const percent = percentText(toPercent(view.usedRatio, 1));
+  const carryNote = view.carryInCents > 0
+    ? `本期预算里还带着上一期结转的 ${formatCents(view.carryInCents)} 元，所以本月剩余预算与当前可支配余额不一样。`
+    : (view.carryOver
+      ? '结余结转开着：上一期没花完的会带进这一期。'
+      : '结余结转已关闭：本期剩余预算不会累加往期结余。');
+  c.body.appendChild(meter(view.usedRatio, {
+    label: '本月预算使用',
+    detail: `已用 ${percent}% · 剩余 ${formatCents(view.remainingCents)} 元`,
+    note: carryNote,
+  }).wrap);
+
+  c.body.appendChild(el('p', 'muted-note', `${ctx.humanPeriod(view.periodStart, view.cycleDay)} · 周期起始日每月 ${view.cycleDay} 日 · 钱包里的纸币是虚拟视觉表现，不代表真实货币。`));
+  return c.section;
+}
+
+/** 显眼的主按钮 */
+function homeAdd(ctx) {
+  const wrap = el('div', 'home-add');
+  const btn = button('记一笔', { kind: 'primary', icon: 'plus', block: true, onClick: () => ctx.navigate('add') });
+  btn.classList.add('btn-lg');
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+/** 今日消费：设计稿里卡片头右边就是今天的合计 */
+function todayCard(ctx) {
+  const state = ctx.getState();
+  const stats = ctx.getStatsView();
+  const today = ctx.sortedRecords(state.records).filter((r) => r.date === stats.todayKey);
+  const total = el('span', 'head-total', formatCents(stats.todayTotalCents));
+  const c = card({
+    title: '今日消费',
+    headingLevel: 3,
+    action: total,
+    sub: today.length
+      ? `${today.length} 笔 · ${today.filter((r) => r.isNonEssential).length} 笔标了非必需`
+      : `${ctx.humanDate(stats.todayKey)} · 还没有记录`,
+  });
+  if (!today.length) {
+    c.body.appendChild(emptyState(
+      '今天还没有消费记录。花掉的钱记下来之后，钱包里的纸币才会动起来。',
+      button('记一笔', { kind: 'primary', icon: 'plus', onClick: () => ctx.navigate('add') }),
+      'note',
+    ));
+    return c.section;
+  }
+  const list = el('div', 'row-list');
+  for (const record of today.slice(0, 8)) list.appendChild(recordRow(record, (id) => ctx.openRecordDetail(id)));
+  c.body.appendChild(list);
+  if (today.length > 8) c.body.appendChild(el('p', 'muted-note', `今天还有 ${today.length - 8} 笔没显示，去消费记录页看全部。`));
+  return c.section;
+}
+
+/** 最近消费（5 条） */
+function recentCard(ctx) {
+  const state = ctx.getState();
+  const all = ctx.sortedRecords(state.records);
+  const c = card({
+    title: '最近消费',
+    headingLevel: 3,
+    action: all.length ? linkButtonSafe('查看全部', () => ctx.navigate('records')) : null,
+    sub: all.length ? `共 ${all.length} 笔记录 · 这里显示最近 ${Math.min(5, all.length)} 笔` : null,
+  });
+  if (!all.length) {
+    c.body.appendChild(emptyState(
+      '还没有消费记录。第一笔记下来之后，钱包里的纸币才会动起来。',
+      button('记第一笔', { kind: 'primary', icon: 'plus', onClick: () => ctx.navigate('add') }),
+      'note',
+    ));
+    return c.section;
+  }
+  const list = el('div', 'row-list');
+  for (const record of all.slice(0, 5)) list.appendChild(recordRow(record, (id) => ctx.openRecordDetail(id)));
+  c.body.appendChild(list);
+  return c.section;
+}
+
+/** 想买的东西：这些钱都还没有扣款 */
+function wishSummaryCard(ctx) {
+  const state = ctx.getState();
+  const pending = ctx.sortedWishlist(state.wishlist).filter((w) => w.status !== 'purchased');
+  const totalCents = pending.reduce((sum, w) => sum + (w.priceCents || 0), 0);
+  const c = card({
+    title: '想买的东西',
+    headingLevel: 3,
+    action: linkButtonSafe('管理清单', () => ctx.navigate('wishlist')),
+    sub: pending.length
+      ? `${pending.length} 件想买 · 合计 ${formatAmount(totalCents)} 元 · 这些金额都还没有扣款`
+      : null,
+  });
+  if (!pending.length) {
+    c.body.appendChild(emptyState(
+      '清单是空的。想买的东西先写进来，等一天再决定要不要买。',
+      button('添加想买的', { kind: 'ghost', icon: 'plus', onClick: () => ctx.navigate('wishlist') }),
+      'heart',
+    ));
+    return c.section;
+  }
+  const list = el('div', 'row-list');
+  for (const wish of pending.slice(0, 3)) {
+    const row = el('button', 'row-item');
+    row.type = 'button';
+    row.dataset.wish = wish.id;
+    row.setAttribute('aria-label', `${wish.name} 预计 ${formatAmount(wish.priceCents || 0)} 元，去愿望清单查看`);
+    const tile = el('span', 'row-tile');
+    tile.appendChild(icon('heart', { size: 20 }));
+    row.appendChild(tile);
+    const main = el('span', 'row-main');
+    main.appendChild(el('span', 'row-title', wish.name));
+    main.appendChild(el('span', 'row-meta', `加入于 ${ctx.humanDate(wish.addedAt)}${wish.plannedDate ? ` · 计划 ${wish.plannedDate}` : ''}${wish.status === 'hold' ? ' · 暂不购买' : ''}`));
+    row.appendChild(main);
+    const amtWrap = el('span');
+    amtWrap.appendChild(el('span', 'row-amt', formatAmount(wish.priceCents || 0)));
+    amtWrap.appendChild(el('span', 'row-amt-sub', '预计 · 未扣款'));
+    row.appendChild(amtWrap);
+    row.addEventListener('click', () => ctx.navigate('wishlist'));
+    list.appendChild(row);
+  }
+  c.body.appendChild(list);
+  return c.section;
+}
+
+export function renderWalletView(content, ctx) {
+  const state = ctx.getState();
+  if (!ctx.isConfigured(state)) {
+    renderOnboard(content, ctx);
+    return;
+  }
+  const view = ctx.getBudgetView();
+
+  content.appendChild(heroCard(view, ctx));
+  content.appendChild(homeAdd(ctx));
+  content.appendChild(todayCard(ctx));
+  content.appendChild(recentCard(ctx));
+  content.appendChild(wishSummaryCard(ctx));
 }
